@@ -5,6 +5,7 @@ import json
 import os
 from tkinter import filedialog
 import threading
+from spritesheet import SpriteSheetExtractor
 
 class PyGameIDE:
     def __init__(self, root):
@@ -93,7 +94,42 @@ class PyGameIDE:
         file_menu.add_command(label="Load Project", command=self.load_project)
         file_menu.add_separator()
         file_menu.add_command(label="Export Game", command=self.export_game)
+
+         # Add Sprites menu
+        sprites_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Sprites", menu=sprites_menu)
+        sprites_menu.add_command(label="Extract Sprite Sheet", command=self.extract_sprite_sheet)
+    
         
+    def extract_sprite_sheet(self):
+        # Open file dialog to select sprite sheet
+        file_path = filedialog.askopenfilename(
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.bmp"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if file_path:
+            try:
+                # Create extractor instance
+                extractor = SpriteSheetExtractor()
+                
+                # Extract sprites
+                sprites = extractor.extract_sprites(file_path)
+                
+                # Show success message with extraction details
+                tk.messagebox.showinfo(
+                    "Extraction Complete",
+                    f"Successfully extracted {len(sprites)} sprites to '{extractor.output_folder}' folder"
+                )
+                
+            except Exception as e:
+                tk.messagebox.showerror(
+                    "Extraction Error",
+                    f"An error occurred while extracting sprites: {str(e)}"
+                )
+
     def setup_pygame_preview(self):
         # Initialize Pygame
         pygame.init()
