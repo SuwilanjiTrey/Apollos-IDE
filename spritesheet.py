@@ -1,79 +1,150 @@
-import cv2
-import numpy as np
+from PyQt5.QtWidgets import ( QWidget, QVBoxLayout, 
+                            QHBoxLayout, QPushButton, 
+                            QLabel,  QDoubleSpinBox, 
+                            QSplitter, 
+                            QFileDialog, QFormLayout, QGroupBox, QGraphicsScene, QGraphicsView,
+                            QListWidget, QListWidgetItem)
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
+from PyQt5.QtCore import Qt
 import os
-from PIL import Image
 
-class SpriteSheetExtractor:
-    def __init__(self):
-        self.min_sprite_size = 16  # Minimum sprite size to detect
-        self.output_folder = "extracted_sprites"
+
+class SpriteCanvas(QGraphicsView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setBackgroundBrush(QBrush(QColor("#2B2B2B")))
         
-    def extract_sprites(self, sprite_sheet_path):
-        # Create output folder if it doesn't exist
-        if not os.path.exists(self.output_folder):
-            os.makedirs(self.output_folder)
-            
-        # Read the sprite sheet
-        sprite_sheet = cv2.imread(sprite_sheet_path, cv2.IMREAD_UNCHANGED)
+        # Initialize grid
+        self.grid_size = 32
+        self.show_grid = True
+        self.draw_grid()
         
-        # If image has no alpha channel, convert white/checkered background to transparent
-        if sprite_sheet.shape[2] == 3:
-            sprite_sheet = self._remove_background(sprite_sheet)
+        # Current sprite
+        self.current_sprite = None
         
-        # Convert to grayscale for contour detection
-        alpha_channel = sprite_sheet[:, :, 3]
+    def draw_grid(self):
+        if not self.show_grid:
+            return
+            
+        pen = QPen(QColor("#3A3A3A"))
+        pen.setWidth(1)
         
-        # Find contours
-        contours, _ = cv2.findContours(alpha_channel, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Process each contour
-        sprites = []
-        for i, contour in enumerate(contours):
-            # Get bounding rectangle
-            x, y, w, h = cv2.boundingRect(contour)
+        # Draw vertical lines
+        for x in range(0, 800, self.grid_size):
+            self.scene.addLine(x, 0, x, 600, pen)
             
-            # Filter out too small sprites
-            if w < self.min_sprite_size or h < self.min_sprite_size:
-                continue
-                
-            # Extract sprite
-            sprite = sprite_sheet[y:y+h, x:x+w]
-            
-            # Save sprite
-            sprite_filename = f"sprite_{i}.png"
-            sprite_path = os.path.join(self.output_folder, sprite_filename)
-            
-            # Convert from BGR to RGB
-            sprite_rgb = cv2.cvtColor(sprite, cv2.COLOR_BGRA2RGBA)
-            
-            # Save using PIL to preserve transparency
-            Image.fromarray(sprite_rgb).save(sprite_path)
-            
-            sprites.append({
-                'path': sprite_path,
-                'width': w,
-                'height': h,
-                'x': x,
-                'y': y
-            })
-            
-        return sprites
+        # Draw horizontal lines
+        for y in range(0, 600, self.grid_size):
+            self.scene.addLine(0, y, 800, y, pen)
     
-    def _remove_background(self, image):
-        # Convert to RGBA
-        rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
+    def set_sprite(self, pixmap):
+        self.scene.clear()
+        self.draw_grid()
+        if pixmap:
+            self.current_sprite = self.scene.addPixmap(pixmap)
+            self.current_sprite.setFlag(self.current_sprite.ItemIsMovable)
+            self.current_sprite.setFlag(self.current_sprite.ItemIsSelectable)
+            # Center the sprite
+            self.centerOn(self.current_sprite)
+    
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.ControlModifier:
+            # Zoom
+            factor = 1.1 if event.angleDelta().y() > 0 else 0.9
+            self.scale(factor, factor)
+        else:
+            super().wheelEvent(event)
+
+class SpriteEditor(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()
+        self.sprites = {}  # Dictionary to store loaded sprites
         
-        # Create mask for white background
-        white_mask = np.all(image >= [250, 250, 250], axis=2)
+    def init_ui(self):
+        layout = QVBoxLayout(self)
         
-        # Create mask for checkered pattern
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        pattern_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]
+        # Toolbar
+        toolbar = QHBoxLayout()
         
-        # Combine masks
-        background_mask = white_mask | (pattern_mask == 255)
+        self.load_btn = QPushButton("Load Sprite")
+        self.load_btn.clicked.connect(self.load_sprite)
+        toolbar.addWidget(self.load_btn)
         
-        # Set alpha channel
-        rgba[:, :, 3] = ~background_mask * 255
+        self.grid_btn = QPushButton("Toggle Grid")
+        self.grid_btn.clicked.connect(self.toggle_grid)
+        toolbar.addWidget(self.grid_btn)
         
-        return rgba
+        layout.addLayout(toolbar)
+        
+        # Split view for sprite list and canvas
+        splitter = QSplitter(Qt.Horizontal)
+        
+        # Sprite list
+        self.sprite_list = QListWidget()
+        self.sprite_list.itemClicked.connect(self.on_sprite_selected)
+        sprite_container = QWidget()
+        sprite_layout = QVBoxLayout(sprite_container)
+        sprite_layout.addWidget(QLabel("Sprites"))
+        sprite_layout.addWidget(self.sprite_list)
+        splitter.addWidget(sprite_container)
+        
+        # Sprite canvas
+        self.canvas = SpriteCanvas()
+        splitter.addWidget(self.canvas)
+        
+        # Set splitter sizes
+        splitter.setSizes([200, 600])
+        layout.addWidget(splitter)
+        
+        # Properties panel
+        props_group = QGroupBox("Sprite Properties")
+        props_layout = QFormLayout(props_group)
+        
+        self.scale_spin = QDoubleSpinBox()
+        self.scale_spin.setRange(0.1, 10.0)
+        self.scale_spin.setValue(1.0)
+        self.scale_spin.setSingleStep(0.1)
+        self.scale_spin.valueChanged.connect(self.update_sprite_scale)
+        props_layout.addRow("Scale:", self.scale_spin)
+        
+        layout.addWidget(props_group)
+    
+    def load_sprite(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Sprite", "", "Images (*.png *.jpg *.bmp)")
+        
+        if file_path:
+            pixmap = QPixmap(file_path)
+            if not pixmap.isNull():
+                sprite_name = os.path.basename(file_path)
+                self.sprites[sprite_name] = pixmap
+                
+                # Add to list
+                item = QListWidgetItem(sprite_name)
+                self.sprite_list.addItem(item)
+                
+                # Show in canvas
+                self.canvas.set_sprite(pixmap)
+    
+    def toggle_grid(self):
+        self.canvas.show_grid = not self.canvas.show_grid
+        self.canvas.scene.clear()
+        self.canvas.draw_grid()
+        if self.canvas.current_sprite:
+            self.canvas.set_sprite(self.sprites[self.sprite_list.currentItem().text()])
+    
+    def on_sprite_selected(self, item):
+        sprite_name = item.text()
+        if sprite_name in self.sprites:
+            self.canvas.set_sprite(self.sprites[sprite_name])
+    
+    def update_sprite_scale(self, scale):
+        if self.canvas.current_sprite:
+            self.canvas.current_sprite.setScale(scale)
